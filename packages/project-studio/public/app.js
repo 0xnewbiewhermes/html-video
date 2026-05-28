@@ -1018,7 +1018,26 @@ function renderPreview() {
     <iframe id="preview-iframe" sandbox="allow-scripts" src="${iframeSrc}"></iframe>
     ${stamp ? `<div class="stamp">${esc(stamp)}</div>` : ''}
   </div>`;
+  attachPreviewScaler();
   renderFramesStrip();
+}
+
+// Keep --preview-scale on .preview-frame in sync with its rendered width
+// so the 1920×1080 iframe shrinks proportionally rather than getting
+// cropped by a smaller viewport.
+let _previewResizeObserver = null;
+function attachPreviewScaler() {
+  const frame = document.querySelector('.preview-frame');
+  if (!frame) return;
+  const apply = () => {
+    const w = frame.clientWidth;
+    if (!w) return;
+    frame.style.setProperty('--preview-scale', (w / 1920).toFixed(4));
+  };
+  apply();
+  if (_previewResizeObserver) _previewResizeObserver.disconnect();
+  _previewResizeObserver = new ResizeObserver(apply);
+  _previewResizeObserver.observe(frame);
 }
 
 function reloadPreview() {
