@@ -29,6 +29,7 @@ const state = {
   pendingAttachments: [],  // [{file, dataUrl?, name, kind, size}] before send
   // v0.8: multi-frame timeline state
   activeFrameId: null,     // graphNodeId currently shown in iframe
+  iterateFocusFrameId: null, // graphNodeId iterations should target only (null = whole video)
   lastGraph: null,         // last fetched ContentGraph (for download)
 };
 
@@ -485,18 +486,44 @@ function renderComposer() {
   if (!ta) return;
   const availableAgents = state.agents.filter(a => a.available);
   const agentsKnown = state.agents.length > 0;
-  // Composer is ready as soon as there's a project + an agent. Template is OPTIONAL
-  // — agent can synthesize HTML from scratch from the user's prompt + attachments.
-  // While agent detection is still in flight (state.agents empty), allow typing
-  // optimistically so the user doesn't have to wait — the send button stays
-  // disabled until we confirm an agent is available.
   const canType = !!p && !state.composing;
   const canSend = !!(p && availableAgents.length > 0 && !state.composing);
   ta.disabled = !canType;
   sendBtn.disabled = !canSend;
+
+  // Focus chip: when a frame is pinned for single-frame iterate, show it
+  // above the textarea so the user knows their next message will only
+  // rewrite that frame. Click to clear.
+  const shell = document.getElementById('composer-shell');
+  if (shell) {
+    let chip = shell.querySelector('.focus-chip');
+    const focus = state.iterateFocusFrameId;
+    if (focus) {
+      const order = (p?.frames ?? []).find((f) => f.graphNodeId === focus)?.order ?? 0;
+      const html = `🎯 仅修改第 ${String(order + 1).padStart(2, '0')} 帧 <span class="fid">${esc(focus)}</span><button title="清除" type="button">✕</button>`;
+      if (!chip) {
+        chip = document.createElement('div');
+        chip.className = 'focus-chip';
+        // Insert above attachments (or as first child).
+        shell.insertBefore(chip, shell.firstChild);
+      }
+      chip.innerHTML = html;
+      chip.querySelector('button').onclick = (e) => {
+        e.stopPropagation();
+        state.iterateFocusFrameId = null;
+        renderComposer();
+        renderFramesStrip();
+      };
+    } else if (chip) {
+      chip.remove();
+    }
+  }
+
   ta.placeholder = !p ? 'Pick a project first…'
     : !agentsKnown ? 'Describe the video while we check for agents…'
     : availableAgents.length === 0 ? 'Install Claude Code (claude CLI) to enable chat…'
+    : state.iterateFocusFrameId
+      ? `只修改这一帧的内容（点掉上方芯片可恢复整片）…`
     : !p.templateId
       ? 'Describe a video — style, content, mood. Or pick a template above for a quick start.'
       : 'Describe the video — content, names, data, mood…';
@@ -1071,11 +1098,15 @@ function renderFramesStrip() {
   // versioned URL via `?v=<timestamp>` derived from project.updatedAt).
   const ver = p.updatedAt ? new Date(p.updatedAt).getTime() : Date.now();
   const tabs = frames.map((f) => {
-    const active = f.graphNodeId === state.activeFrameId ? 'active' : '';
+    const isActive = f.graphNodeId === state.activeFrameId;
+    const isFocus = f.graphNodeId === state.iterateFocusFrameId;
+    const cls = ['frame-tab', isActive && 'active', isFocus && 'focus']
+      .filter(Boolean).join(' ');
     const src = `/preview/${p.id}/frame/${encodeURIComponent(f.graphNodeId)}?thumb=1&v=${ver}`;
-    return `<button class="frame-tab ${active}" data-fid="${esc(f.graphNodeId)}">
+    return `<button class="${cls}" data-fid="${esc(f.graphNodeId)}">
       <div class="frame-thumb">
         <iframe sandbox="allow-scripts" src="${src}" tabindex="-1" loading="lazy"></iframe>
+        ${isFocus ? '<div class="focus-mark" title="正在编辑此帧">✎</div>' : ''}
       </div>
       <div class="frame-tab-label">
         <span class="order">${String(f.order + 1).padStart(2, '0')}</span>
@@ -1085,10 +1116,24 @@ function renderFramesStrip() {
   }).join('');
   strip.innerHTML = `<span class="label">Frames</span>${tabs}
     <button class="frame-graph-btn" id="btn-show-graph">View graph</button>`;
+  // Single-click: switch which frame is shown in the centre preview.
+  // Double-click: pin this frame as the iteration target so subsequent
+  // chat messages only rewrite this frame. Click another / dbl-click the
+  // same one to clear.
   strip.querySelectorAll('button.frame-tab').forEach((btn) => {
     btn.addEventListener('click', () => {
-      state.activeFrameId = btn.dataset.fid;
+      const fid = btn.dataset.fid;
+      state.activeFrameId = fid;
+      // First click also pins focus so the user doesn't have to dbl-click —
+      // but only when nothing else is focused, or they're switching to a new
+      // frame. Clicking the already-focused frame again clears focus.
+      if (state.iterateFocusFrameId === fid) {
+        state.iterateFocusFrameId = null;
+      } else {
+        state.iterateFocusFrameId = fid;
+      }
       renderPreview();
+      renderComposer();
     });
   });
   const gbtn = document.getElementById('btn-show-graph');
@@ -1260,11 +1305,22 @@ async function sendMessage() {
   state.composing = true;
   renderComposer();
 
-  // User message includes attachment summary
+  // Iterate scope: when the user has selected a specific frame in the
+  // strip, the iterate-phase server route should only rewrite that frame.
+  // We pass the focus along on every send (server uses it only for iterate).
+  const focusFrame = state.iterateFocusFrameId || '';
+
+  // User message includes attachment summary + focus chip
   const attSummary = hasAttachments
     ? `\n\n📎 ${state.pendingAttachments.length} attachment(s): ${state.pendingAttachments.map(a => a.name).join(', ')}`
     : '';
-  state.messages.push({ role: 'user', content: text + attSummary, ts: Date.now() });
+  const focusSummary = focusFrame ? `\n\n🎯 focus: frame ${focusFrame}` : '';
+  state.messages.push({
+    role: 'user',
+    content: text + attSummary + focusSummary,
+    ts: Date.now(),
+    ...(focusFrame ? { focusFrameId: focusFrame } : {}),
+  });
   state.messages.push({ role: 'thinking', content: 'agent thinking', ts: Date.now() });
   const thinkingIdx = state.messages.length - 1;
   renderChatLog();
@@ -1276,6 +1332,7 @@ async function sendMessage() {
     if (hasAttachments) {
       const fd = new FormData();
       fd.append('content', text);
+      if (focusFrame) fd.append('focus_frame_id', focusFrame);
       for (const a of state.pendingAttachments) fd.append('file', a.file, a.name);
       // Clear UI attachments before request so user sees them disappear
       state.pendingAttachments = [];
@@ -1288,7 +1345,10 @@ async function sendMessage() {
       res = await fetch(`/api/projects/${state.selected.id}/messages`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ content: text }),
+        body: JSON.stringify({
+          content: text,
+          ...(focusFrame ? { focus_frame_id: focusFrame } : {}),
+        }),
       });
     }
     if (!res.ok || !res.body) {
@@ -1319,12 +1379,17 @@ async function sendMessage() {
             renderChatLog();
           } else if (ev.type === 'preview_ready') {
             const frameCount = ev.frames || 0;
-            const summary = frameCount > 0
-              ? `✓ ${frameCount}-frame storyboard generated`
-              : '✓ HTML preview updated';
-            const event = frameCount > 0
-              ? `🎞 storyboard reloaded (${frameCount} frames)`
-              : '🎞 preview reloaded';
+            const focusedFrame = ev.focused_frame;
+            const summary = focusedFrame
+              ? `✓ frame ${focusedFrame} updated`
+              : frameCount > 0
+                ? `✓ ${frameCount}-frame storyboard generated`
+                : '✓ HTML preview updated';
+            const event = focusedFrame
+              ? `🎞 frame ${focusedFrame} reloaded`
+              : frameCount > 0
+                ? `🎞 storyboard reloaded (${frameCount} frames)`
+                : '🎞 preview reloaded';
             if (assistantIdx === -1) {
               state.messages[thinkingIdx] = { role: 'assistant', agent: state.selected.agentId ?? 'claude', content: summary, ts: Date.now() };
               assistantIdx = thinkingIdx;

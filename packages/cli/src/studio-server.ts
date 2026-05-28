@@ -277,6 +277,7 @@ export async function startStudioServer(ctx: CliContext, port: number): Promise<
         const id = msgsMatch[1];
         const ct = req.headers['content-type'] ?? '';
         let userText = '';
+        let focusFrameId = '';
         const attachments: Attachment[] = [];
 
         const project0 = await ctx.orchestrator.load(id);
@@ -285,6 +286,8 @@ export async function startStudioServer(ctx: CliContext, port: number): Promise<
           for (const p of parts) {
             if (p.kind === 'field' && p.name === 'content') {
               userText = p.value;
+            } else if (p.kind === 'field' && p.name === 'focus_frame_id') {
+              focusFrameId = p.value;
             } else if (p.kind === 'file') {
               const updatedProject = await ctx.orchestrator.addFileAsset(id, p.tmpPath);
               const newAsset = updatedProject.assets[updatedProject.assets.length - 1];
@@ -301,6 +304,7 @@ export async function startStudioServer(ctx: CliContext, port: number): Promise<
         } else {
           const body = await readBody(req);
           userText = (body.content as string) ?? '';
+          focusFrameId = (body.focus_frame_id as string) ?? '';
         }
 
         if (!userText && attachments.length === 0) {
@@ -335,10 +339,18 @@ export async function startStudioServer(ctx: CliContext, port: number): Promise<
 
         // Compose prompt — template-aware OR template-free
         const projectDir = await ctx.projects.ensureDir(id);
-        const priorHtmlPath = join(projectDir, 'preview.html');
-        const priorHtml = existsSync(priorHtmlPath)
-          ? await readFile(priorHtmlPath, 'utf8')
+        // Frame focus: when iterating, the user can pin a specific frame
+        // so the next turn only rewrites that frame's HTML instead of the
+        // whole-project preview.html.
+        const focusFrame = focusFrameId
+          ? (project.frames ?? []).find((f) => f.graphNodeId === focusFrameId)
+          : undefined;
+        const focusFrameHtml = focusFrame && existsSync(focusFrame.htmlPath)
+          ? await readFile(focusFrame.htmlPath, 'utf8')
           : '';
+        const priorHtmlPath = join(projectDir, 'preview.html');
+        const priorHtml = focusFrameHtml
+          || (existsSync(priorHtmlPath) ? await readFile(priorHtmlPath, 'utf8') : '');
         let exampleHtml = '';
         if (tmpl) {
           const exampleHtmlPath = join(tmpl.__dir!, tmpl.source_entry);
@@ -354,6 +366,7 @@ export async function startStudioServer(ctx: CliContext, port: number): Promise<
           history,
           userText,
           attachments,
+          focusFrameId: focusFrameId || undefined,
         });
         const phaseInfo = detectPhase(history, userText, !!project.templateId);
         const t0 = Date.now();
@@ -451,27 +464,43 @@ export async function startStudioServer(ctx: CliContext, port: number): Promise<
             `[studio:msg] proj=${id} phase=${phaseInfo.phase} done in ${elapsedMs}ms exit=${exitInfo.exitCode} text=${assistantText.length}B chunks=${textChunks}\n`,
           );
 
-          // Multi-frame extraction on the off chance the agent did emit it
-          // (e.g. on a free-text iterate turn the user's text triggered it).
-          const multi = extractContentGraphAndFrames(assistantText);
-          if (multi && multi.frames.length > 0) {
-            await ctx.orchestrator.writeContentGraph(id, multi.graph);
-            for (const f of multi.frames) {
-              try {
-                await ctx.orchestrator.writeFrameHtml(id, f.nodeId, f.html);
-              } catch (err) {
-                const msg = err instanceof Error ? err.message : String(err);
-                sseWrite({ type: 'text', chunk: `\n[frame ${f.nodeId} skipped: ${msg}]\n` });
-              }
-            }
-            sseWrite({ type: 'preview_ready', preview_url: `/preview/${id}`, frames: multi.frames.length });
-            summaryLine = `✓ ${multi.frames.length}-frame storyboard generated (intent: ${multi.graph.intent})`;
-          } else {
+          // Single-frame iterate: result HTML goes back to the focused frame
+          // only — never overwrites the whole preview.html.
+          if (focusFrameId) {
             const extracted = extractHtmlDocument(assistantText);
             if (extracted) {
-              await ctx.orchestrator.writePreviewHtmlRaw(id, extracted);
-              sseWrite({ type: 'preview_ready', preview_url: `/preview/${id}` });
-              summaryLine = '✓ updated the HTML preview';
+              try {
+                await ctx.orchestrator.writeFrameHtml(id, focusFrameId, extracted);
+                sseWrite({ type: 'preview_ready', preview_url: `/preview/${id}`, focused_frame: focusFrameId });
+                summaryLine = `✓ frame ${focusFrameId} updated`;
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                sseWrite({ type: 'text', chunk: `\n[frame ${focusFrameId} write failed: ${msg}]\n` });
+              }
+            }
+          } else {
+            // Multi-frame extraction on the off chance the agent did emit it
+            // (e.g. on a free-text iterate turn the user's text triggered it).
+            const multi = extractContentGraphAndFrames(assistantText);
+            if (multi && multi.frames.length > 0) {
+              await ctx.orchestrator.writeContentGraph(id, multi.graph);
+              for (const f of multi.frames) {
+                try {
+                  await ctx.orchestrator.writeFrameHtml(id, f.nodeId, f.html);
+                } catch (err) {
+                  const msg = err instanceof Error ? err.message : String(err);
+                  sseWrite({ type: 'text', chunk: `\n[frame ${f.nodeId} skipped: ${msg}]\n` });
+                }
+              }
+              sseWrite({ type: 'preview_ready', preview_url: `/preview/${id}`, frames: multi.frames.length });
+              summaryLine = `✓ ${multi.frames.length}-frame storyboard generated (intent: ${multi.graph.intent})`;
+            } else {
+              const extracted = extractHtmlDocument(assistantText);
+              if (extracted) {
+                await ctx.orchestrator.writePreviewHtmlRaw(id, extracted);
+                sseWrite({ type: 'preview_ready', preview_url: `/preview/${id}` });
+                summaryLine = '✓ updated the HTML preview';
+              }
             }
           }
         }
@@ -790,6 +819,8 @@ interface BuildPromptArgs {
   history: ChatMessage[];
   userText: string;
   attachments: Attachment[];
+  /** When set, iterate-phase prompts target only this frame's HTML. */
+  focusFrameId?: string;
 }
 
 interface Attachment {
@@ -1389,10 +1420,14 @@ h1{font-size:8vw;letter-spacing:-.03em;animation:in 1.2s ease forwards;opacity:0
 
   // ---- iterate: post-generation free-form revision ----
   // Tight prompt: agent should treat user's text as a revision instruction
-  // applied to the existing preview HTML (or storyboard). No decision tree,
-  // no card schemas — those are over.
+  // applied to the existing HTML — either the whole-video preview, or a
+  // single focused frame when focusFrameId is set.
   const it: string[] = [];
-  it.push(`The user is iterating on an existing HTML video. Apply their revision request below to the prior preview HTML, keeping the visual identity unless they ask for a different one.`);
+  if (args.focusFrameId) {
+    it.push(`The user has pinned frame "${args.focusFrameId}" and wants to revise ONLY that frame. Apply their revision request to the frame HTML below. Do NOT touch any other frame in the project. Keep the existing visual identity (colours / typography / motion vocabulary) unless the user explicitly asks for a different look.`);
+  } else {
+    it.push(`The user is iterating on an existing HTML video. Apply their revision request below to the prior preview HTML, keeping the visual identity unless they ask for a different one.`);
+  }
   it.push('');
   it.push(`# User revision request`);
   it.push(userText);
@@ -1403,7 +1438,9 @@ h1{font-size:8vw;letter-spacing:-.03em;animation:in 1.2s ease forwards;opacity:0
     it.push('');
   }
   if (baseHtml) {
-    it.push(`# Prior preview HTML`);
+    it.push(args.focusFrameId
+      ? `# Frame "${args.focusFrameId}" HTML (this is the ONLY frame you should rewrite)`
+      : `# Prior preview HTML`);
     it.push('```html');
     it.push(baseHtml.slice(0, 6000));
     it.push('```');
