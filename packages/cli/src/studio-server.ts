@@ -1485,6 +1485,17 @@ function detectPhase(
   // Last card was an opener type-pick → user just answered with their type.
   if (prev.kind === 'hv-options' && prev.metaPhase === 'type') {
     inputs.pickedType = trimmed;
+    // With source material already attached, there is nothing more to collect —
+    // the article/repo IS the content. Skip the content-question step (which
+    // otherwise stalls: the agent emits a statement, not an interactive card,
+    // and the flow waits forever for a user reply that never comes) and go
+    // straight to format (if a template is picked) or style.
+    if (hasSourceMaterial) {
+      inputs.contentTurns = collectContentTurns(history);
+      return hasTemplate
+        ? { phase: 'format', inputs }
+        : { phase: 'style', inputs };
+    }
     return { phase: 'content', inputs };
   }
 
