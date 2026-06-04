@@ -99,8 +99,20 @@ export async function render(input: RenderInput, ctx: RenderContext): Promise<Re
             maxMs = Math.max(maxMs, ((parseFloat(d) || 0) + (parseFloat(dels[i] || '0') || 0)) * 1000);
           });
         });
-        const g = (window as unknown as { gsap?: { globalTimeline?: { totalDuration(): number } } }).gsap;
-        const gsapMs = g?.globalTimeline ? g.globalTimeline.totalDuration() * 1000 : 0;
+        // GSAP: do NOT use globalTimeline.totalDuration() — an infinitely
+        // repeating tween (repeat:-1, e.g. a blinking cursor) makes it ~1e10s.
+        // Walk the children and take the longest FINITE (non-repeat:-1) tween.
+        const g = (window as unknown as {
+          gsap?: { globalTimeline?: { getChildren?: (b?: boolean, t?: boolean, tl?: boolean) => Array<{ totalDuration?: () => number; repeat?: () => number; vars?: { repeat?: number } }> } };
+        }).gsap;
+        let gsapMs = 0;
+        const children = g?.globalTimeline?.getChildren?.(true, true, true) ?? [];
+        for (const c of children) {
+          const repeat = typeof c.repeat === 'function' ? c.repeat() : (c.vars?.repeat ?? 0);
+          if (repeat === -1) continue; // infinite loop — ignore
+          const td = typeof c.totalDuration === 'function' ? c.totalDuration() : 0;
+          if (Number.isFinite(td)) gsapMs = Math.max(gsapMs, td * 1000);
+        }
         return Math.max(maxMs, gsapMs);
       });
       // +0.4s settle so the final animation frame is actually captured; cap at
