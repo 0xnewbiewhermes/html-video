@@ -19,7 +19,20 @@
     el = els[i];
     var key = el.getAttribute('data-var');
     var val = vars[key];
-    if (val && typeof val === 'string') el.textContent = val;
+    if (val && typeof val === 'string') {
+    // Convert \n to <br> elements (DOM-safe, no innerHTML).
+    // Multi-line titles like "STAKING\nCRYPTO" render on two lines.
+    if (val.indexOf('\n') !== -1) {
+      el.textContent = ''; // clear
+      var parts = val.split('\n');
+      for (var p = 0; p < parts.length; p++) {
+        if (p > 0) el.appendChild(document.createElement('br'));
+        el.appendChild(document.createTextNode(parts[p]));
+      }
+    } else {
+      el.textContent = val;
+    }
+  }
   }
   if (vars.duration_sec) {
     document.documentElement.style.setProperty('--hv-duration', vars.duration_sec + 's');

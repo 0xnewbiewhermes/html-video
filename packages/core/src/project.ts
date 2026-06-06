@@ -957,8 +957,8 @@ function getDefaultOverlayMap(templateId: string): import('./types/index.js').Pr
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const maps: Record<string, import('./compositor.js').TextOverlayDef[]> = {
     'frame-glitch-title-var': [
-      { variable: 'title', x: 0.5, y: 0.45, fontSize: 96, fontColor: '#f5f5f7', fontFile: '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', align: 'center' },
-      { variable: 'subtitle', x: 0.5, y: 0.58, fontSize: 24, fontColor: '#a0aec0', fontFile: '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', align: 'center' },
+      { variable: 'headline', x: 0.5, y: 0.45, fontSize: 96, fontColor: '#f5f5f7', fontFile: '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', align: 'center' },
+      { variable: 'subheadline', x: 0.5, y: 0.58, fontSize: 24, fontColor: '#a0aec0', fontFile: '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', align: 'center' },
       { variable: 'chip_left', x: 0.06, y: 0.07, fontSize: 16, fontColor: '#a0aec0', fontFile: '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', align: 'left' },
       { variable: 'chip_mid', x: 0.5, y: 0.07, fontSize: 16, fontColor: '#a0aec0', fontFile: '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', align: 'center' },
     ],
