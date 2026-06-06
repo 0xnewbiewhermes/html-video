@@ -464,8 +464,9 @@ export class ProjectOrchestrator {
     }
 
     project.backgroundVideoPath = bgPath;
-    // Store default overlay positions for the template
-    project.textOverlayMap = getDefaultOverlayMap(tmpl?.id ?? '');
+    // Store default overlay positions — use templateId from project or tmpl
+    const overlayTemplateId = project.templateId || tmpl?.id || '';
+    project.textOverlayMap = getDefaultOverlayMap(overlayTemplateId);
     await this.deps.projects.save(project);
     return { project, bgPath };
   }
@@ -529,6 +530,10 @@ export class ProjectOrchestrator {
     const project = await this.deps.projects.load(projectId);
     if (!this.deps.templates.has(templateId)) {
       throw new HtmlVideoError('template-not-found', `Template ${templateId} not found`);
+    }
+    // Link project to template so overlay system can look up textOverlayMap
+    if (project.templateId !== templateId) {
+      await this.setTemplate(projectId, templateId);
     }
     const tmpl = this.deps.templates.get(templateId);
     const { readFile } = await import('node:fs/promises');

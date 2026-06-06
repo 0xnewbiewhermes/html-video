@@ -215,6 +215,16 @@ cli
     await projectPreviewGif(ctx, id, opts.output);
   });
 
+cli
+  .command('project-render-overlay <id>', 'Render using overlay system (fast, no Chromium if background cached)')
+  .option('--output <path>', 'Output MP4 path')
+  .action(async (id: string, opts: any) => {
+    setJsonMode(!!opts.json);
+    const ctx = await bootstrap({ cwd: opts.cwd });
+    const { projectRenderOverlay } = await import('./commands/project.js');
+    await projectRenderOverlay(ctx, id, opts.output);
+  });
+
 // ====== Studio (HTML Anything-style three-pane UI) ======
 
 cli

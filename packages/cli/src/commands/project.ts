@@ -141,6 +141,19 @@ export async function projectPreview(ctx: CliContext, id: string): Promise<void>
   });
 }
 
+export async function projectRenderOverlay(ctx: CliContext, id: string, output?: string): Promise<void> {
+  process.stderr.write('▸ Checking background cache...\n');
+  const project = await ctx.orchestrator.load(id);
+  if (!project.backgroundVideoPath) {
+    process.stderr.write('▸ No cached background — rendering background (Chromium, ~15s)...\n');
+    const { bgPath } = await ctx.orchestrator.renderBackground(id);
+    process.stderr.write(`▸ Background cached at ${bgPath}\n`);
+  }
+  process.stderr.write('▸ Applying text overlay (ffmpeg, fast)...\n');
+  const { outPath } = await ctx.orchestrator.renderWithOverlay(id, output);
+  ok({ project_id: id, output_path: outPath, note: 'overlay render (no Chromium)' });
+}
+
 export async function projectPreviewGif(ctx: CliContext, id: string, output?: string): Promise<void> {
   const { project, gifPath } = await ctx.orchestrator.renderPreviewGif(id, output);
   ok({

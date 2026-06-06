@@ -345,6 +345,26 @@ export async function startStudioServer(ctx: CliContext, port: number): Promise<
         return;
       }
 
+      // Overlay export — uses cached background + ffmpeg drawtext.
+      // ~0.1-1s vs 5-15s for full Chromium re-render.
+      const overlayMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/export-overlay$/);
+      if (overlayMatch && overlayMatch[1] && m === 'POST') {
+        const projectId = overlayMatch[1];
+        try {
+          const project = await ctx.projects.load(projectId);
+          if (!project.backgroundVideoPath) {
+            // First time: render background (Chromium, slower)
+            process.stderr.write(`[studio:overlay] proj=${projectId} no bg yet — rendering background\n`);
+            await ctx.orchestrator.renderBackground(projectId);
+          }
+          const { outPath: overlayPath } = await ctx.orchestrator.renderWithOverlay(projectId);
+          return json(res, 200, { output_path: overlayPath, note: 'overlay render (no Chromium)' });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return json(res, 500, { error: msg });
+        }
+      }
+
       // Generate soundtrack: background music (MiniMax music_generation) and/or
       // narration (MiniMax t2a_v2). Streams SSE progress like export. The
       // generated MP3s are stored as project assets; their ids land in
