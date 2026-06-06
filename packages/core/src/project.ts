@@ -8,7 +8,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { join, basename } from 'node:path';
+import { join, basename, resolve } from 'node:path';
 import type {
   Asset,
   FrameRecord,
@@ -358,6 +358,88 @@ export class ProjectOrchestrator {
     if (project.status === 'draft') project.status = 'previewed';
     await this.deps.projects.save(project);
     return { project, htmlPath: out.htmlPath };
+  }
+
+  /**
+   * Generate multi-frame video from a single template with per-frame variables.
+   *
+   * Uses the template's HTML as the visual base for every frame, injecting
+   * each frameDef's variables (headline, subtitle, etc.) so every scene has
+   * different content but the same look. Automatically inlines the shared
+   * hv-renderer.js so data-var elements update on load.
+   *
+   * Usage:
+   *   await project.generateFramesFromTemplate('frame-glitch-title-var', [
+   *     { headline: 'Intro',    subheadline: 'Scene 1', durationSec: 5 },
+   *     { headline: 'Content',  subheadline: 'Scene 2', durationSec: 5 },
+   *     { headline: 'Outro',    subheadline: 'Scene 3', durationSec: 5 },
+   *   ]);
+   *   await project.exportMp4({ projectId, onProgress });
+   */
+  async generateFramesFromTemplate(
+    projectId: string,
+    templateId: string,
+    frameDefs: Array<{ [key: string]: unknown; durationSec?: number }>,
+    defaults?: { perFrameDuration?: number },
+  ): Promise<{ project: Project; count: number }> {
+    const project = await this.deps.projects.load(projectId);
+    if (!this.deps.templates.has(templateId)) {
+      throw new HtmlVideoError('template-not-found', `Template ${templateId} not found`);
+    }
+    const tmpl = this.deps.templates.get(templateId);
+    const { readFile } = await import('node:fs/promises');
+    const templateHtml = await readFile(join(tmpl.__dir!, tmpl.source_entry), 'utf8');
+
+    // Try to load shared hv-renderer.js
+    let rendererJs = '';
+    try {
+      const rendererPath = resolve(tmpl.__dir!, '../_shared/hv-renderer.js');
+      rendererJs = await readFile(rendererPath, 'utf8');
+    } catch { /* no shared renderer — templates with own inline script still work */ }
+
+    const defaultDuration = defaults?.perFrameDuration ?? 5;
+    const graphNodes = frameDefs.map((def, i) => ({
+      id: `frame-${String(i + 1).padStart(2, '0')}`,
+      kind: 'text' as const,
+      text: typeof def.headline === 'string' ? def.headline : `Frame ${i + 1}`,
+      durationSec: (def.durationSec ?? defaultDuration) as number,
+    }));
+    const graphEdges = graphNodes.slice(0, -1).map((n, i) => ({
+      from: n.id,
+      to: graphNodes[i + 1]!.id,
+      kind: 'sequence' as const,
+    }));
+    const graph = {
+      schemaVersion: 1 as const,
+      intent: 'explainer' as const,
+      nodes: graphNodes,
+      edges: graphEdges,
+    };
+    await this.writeContentGraph(projectId, graph);
+
+    for (let i = 0; i < frameDefs.length; i++) {
+      const def = frameDefs[i]!;
+      const nodeId = graphNodes[i]!.id;
+      const { headline, subheadline, cta, durationSec, ...extra } = def as Record<string, unknown>;
+      const vars = { ...extra, headline, subheadline, cta };
+
+      // Inject variables into template HTML (same pattern as injectVarsHtml in adapter)
+      const varsJson = JSON.stringify(vars).replace(/<\/(script)/gi, '<\\/$1');
+      const headBlock = `<script>\nwindow.__HV_VARS__ = ${varsJson};\nwindow.__HV_DURATION__ = ${(def.durationSec ?? defaultDuration)};\n</script>`;
+      let frameHtml = templateHtml.includes('</head>')
+        ? templateHtml.replace('</head>', `${headBlock}\n</head>`)
+        : templateHtml.replace('</body>', `${headBlock}\n</body>`);
+
+      // Inline shared renderer
+      if (rendererJs) {
+        frameHtml = frameHtml.replace('</body>', `<script>\n${rendererJs}\n</script>\n</body>`);
+      }
+
+      await this.writeFrameHtml(projectId, nodeId, frameHtml);
+    }
+
+    const updated = await this.deps.projects.load(projectId);
+    return { project: updated, count: frameDefs.length };
   }
 
   async exportMp4(args: {

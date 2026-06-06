@@ -159,7 +159,7 @@ export async function render(input: RenderInput, ctx: RenderContext): Promise<Re
         const tag = `<script>\n${renderer}\n</script>`;
         injected = injected.replace('</body>', `${tag}\n</body>`);
       }
-      const injectedPath = prepared.loadPath.replace('.html', `.hv-${Date.now()}.html`);
+      const injectedPath = prepared.loadPath.replace(/\.html$/, `.hv-${Date.now()}.html`);
       await writeFile(injectedPath, injected, 'utf8');
       if (cleanupSrc) { const c = cleanupSrc; await c().catch(() => {}); }
       cleanupSrc = async () => { await rm(injectedPath, { force: true }).catch(() => {}); };
