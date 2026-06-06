@@ -394,26 +394,40 @@ export async function render(input: RenderInput, ctx: RenderContext): Promise<Re
   // target. -t then trims to the precise length. For 'auto' we keep the old
   // behavior (just -t, no padding) — there the duration is a soft fallback.
   const explicit = input.config.durationMode === 'explicit';
-  await runFfmpeg([
-    '-y',
-    // -ss before -i = fast input seek, drops the frozen lead-in entirely.
-    ...(seekSec > 0 ? ['-ss', seekSec.toFixed(3)] : []),
-    '-i', webmPath!,
-    // Pad-then-trim so an explicit per-frame length lands exactly (e.g. user
-    // asked 4s, animation ran 2.8s → hold the final frame to fill 4s).
-    ...(explicit ? ['-vf', `tpad=stop_mode=clone:stop_duration=${totalDuration}`] : []),
-    // Force exact duration: playwright's recordVideo sometimes overshoots
-    // by the time it takes to close the context. -t trims to the requested
-    // length (seconds, accepts fractions).
-    '-t', String(totalDuration),
-    '-r', String(fps),
-    '-c:v', 'libx264',
-    '-pix_fmt', 'yuv420p',
-    '-preset', 'medium',
-    '-crf', '20',
-    '-movflags', '+faststart',
-    input.config.outputPath,
-  ]);
+  const isGif = input.config.format === 'gif';
+  if (isGif) {
+    // GIF preview: lower fps, smaller size, fast encode.
+    // Palette-based for quality; 10 fps, 480px wide so it loads fast.
+    const palettePath = webmPath!.replace('.webm', '-palette.png');
+    await runFfmpeg([
+      '-y', '-ss', seekSec > 0 ? seekSec.toFixed(3) : '0', '-i', webmPath!,
+      '-vf', 'fps=10,scale=480:-1:flags=lanczos,palettegen=stats_mode=diff',
+      '-t', String(Math.min(totalDuration, 4)), // GIF preview caps at 4s
+      palettePath,
+    ]);
+    await runFfmpeg([
+      '-y', '-i', webmPath!, '-i', palettePath,
+      '-filter_complex', `fps=10,scale=480:-1:flags=lanczos[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=5`,
+      '-t', String(Math.min(totalDuration, 4)),
+      input.config.outputPath,
+    ]);
+    await rm(palettePath, { force: true }).catch(() => {});
+  } else {
+    await runFfmpeg([
+      '-y',
+      ...(seekSec > 0 ? ['-ss', seekSec.toFixed(3)] : []),
+      '-i', webmPath!,
+      ...(explicit ? ['-vf', `tpad=stop_mode=clone:stop_duration=${totalDuration}`] : []),
+      '-t', String(totalDuration),
+      '-r', String(fps),
+      '-c:v', 'libx264',
+      '-pix_fmt', 'yuv420p',
+      '-preset', 'medium',
+      '-crf', '20',
+      '-movflags', '+faststart',
+      input.config.outputPath,
+    ]);
+  }
 
   // Clean tmp dir
   await rm(recordDir, { recursive: true, force: true }).catch(() => {});

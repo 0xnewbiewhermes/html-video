@@ -175,6 +175,24 @@ cli
   });
 
 cli
+  .command('generate-from-template <projectId> <templateId>', 'Generate multi-frame video from a template with per-frame variables')
+  .option('--frames <json>', 'JSON array of per-frame variables (e.g. \'[{"headline":"A"},{"headline":"B"}]\')')
+  .option('--frames-file <path>', 'JSON file containing frame definitions array')
+  .option('--per-frame <s>', 'Default duration per frame in seconds (default 5)', { default: '5' })
+  .option('--output <path>', 'Output MP4 path')
+  .action(async (projectId: string, templateId: string, opts: any) => {
+    setJsonMode(!!opts.json);
+    const ctx = await bootstrap({ cwd: opts.cwd });
+    const { generateFromTemplateCli } = await import('./commands/project.js');
+    await generateFromTemplateCli(ctx, projectId, templateId, {
+      frames: opts.frames ? JSON.parse(opts.frames) : undefined,
+      framesFile: opts.framesFile,
+      perFrame: Number(opts.perFrame),
+      output: opts.output,
+    });
+  });
+
+cli
   .command('project-render <id>', 'Export the project to MP4')
   .option('--output <path>', 'Output MP4 path')
   .option('--stream-progress', 'Emit progress as NDJSON')
@@ -185,6 +203,16 @@ cli
       output: opts.output,
       streamProgress: !!opts.streamProgress,
     });
+  });
+
+cli
+  .command('project-preview-gif <id>', 'Export a quick GIF preview (fast, 4s cap, 480p)')
+  .option('--output <path>', 'Output GIF path')
+  .action(async (id: string, opts: any) => {
+    setJsonMode(!!opts.json);
+    const ctx = await bootstrap({ cwd: opts.cwd });
+    const { projectPreviewGif } = await import('./commands/project.js');
+    await projectPreviewGif(ctx, id, opts.output);
   });
 
 // ====== Studio (HTML Anything-style three-pane UI) ======

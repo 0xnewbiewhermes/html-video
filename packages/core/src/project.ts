@@ -361,6 +361,61 @@ export class ProjectOrchestrator {
   }
 
   /**
+   * Quick GIF preview — short, small, fast. Uses the same adapter render()
+   * but with format: 'gif', capped at 4s, 480px wide, 10fps.
+   * Great for rapid iteration before committing to a full MP4 export.
+   */
+  async renderPreviewGif(projectId: string, outputPath?: string): Promise<{ project: Project; gifPath: string }> {
+    const project = await this.deps.projects.load(projectId);
+
+    if (project.frames && project.frames.length > 0) {
+      // Multi-frame: render first frame as GIF preview.
+      const first = project.frames.sort((a, b) => a.order - b.order)[0]!;
+      const projectDir = await this.deps.projects.ensureDir(projectId);
+      const gifOut = outputPath ?? join(projectDir, 'preview.gif');
+      const tmpl = project.templateId ? this.deps.templates.get(project.templateId) : null;
+      const engineId = tmpl?.engine ?? 'hyperframes';
+      const adapter = this.deps.engines.get(engineId);
+      await adapter.render({
+        template: { id: `frame-${first.graphNodeId}`, engine: engineId, sourcePath: first.htmlPath },
+        variables: project.variables,
+        config: {
+          format: 'gif',
+          resolution: { width: 480, height: 270 },
+          fps: 10,
+          duration: Math.min(first.durationSec, 4),
+          outputPath: gifOut,
+        },
+      }, { workDir: projectDir });
+      return { project, gifPath: gifOut };
+    }
+
+    // Single-frame: render preview template as GIF.
+    if (!project.templateId) {
+      throw new HtmlVideoError('invalid-input', 'Project has no template or frames');
+    }
+    const tmpl = this.deps.templates.get(project.templateId);
+    const adapter = this.deps.engines.get(tmpl.engine);
+    const projectDir = await this.deps.projects.ensureDir(projectId);
+    const gifOut = outputPath ?? join(projectDir, 'preview.gif');
+    await adapter.render({
+      template: { id: tmpl.id, engine: tmpl.engine, sourcePath: join(tmpl.__dir!, tmpl.source_entry) },
+      variables: project.variables,
+      config: {
+        format: 'gif',
+        resolution: { width: 480, height: 270 },
+        fps: 10,
+        duration: Math.min(
+          typeof project.variables.duration_sec === 'number' ? project.variables.duration_sec : 5,
+          4,
+        ),
+        outputPath: gifOut,
+      },
+    }, { workDir: projectDir });
+    return { project, gifPath: gifOut };
+  }
+
+  /**
    * Generate multi-frame video from a single template with per-frame variables.
    *
    * Uses the template's HTML as the visual base for every frame, injecting

@@ -141,6 +141,16 @@ export async function projectPreview(ctx: CliContext, id: string): Promise<void>
   });
 }
 
+export async function projectPreviewGif(ctx: CliContext, id: string, output?: string): Promise<void> {
+  const { project, gifPath } = await ctx.orchestrator.renderPreviewGif(id, output);
+  ok({
+    project_id: project.id,
+    gif_path: gifPath,
+    duration_sec: project.frames?.[0]?.durationSec ?? '?',
+    note: 'Quick GIF preview (max 4s, 480p). Use `project-render` for full MP4.',
+  });
+}
+
 export async function projectRender(
   ctx: CliContext,
   id: string,
@@ -152,4 +162,50 @@ export async function projectRender(
     onProgress: opts.streamProgress ? (pct, stage) => progress(stage, pct) : undefined,
   });
   ok({ project_id: project.id, output_path: outputPath, status: project.status });
+}
+
+export interface GenerateFromTemplateOpts {
+  frames?: Record<string, unknown>[];
+  framesFile?: string;
+  perFrame: number;
+  output?: string;
+}
+
+export async function generateFromTemplateCli(
+  ctx: CliContext,
+  projectId: string,
+  templateId: string,
+  opts: GenerateFromTemplateOpts,
+): Promise<void> {
+  let frames = opts.frames;
+  if (!frames && opts.framesFile) {
+    const { readFile } = await import('node:fs/promises');
+    frames = JSON.parse(await readFile(resolve(opts.framesFile), 'utf8'));
+  }
+  if (!frames || !Array.isArray(frames) || frames.length === 0) {
+    fail('invalid-input', 'Provide --frames JSON or --frames-file path with a non-empty array');
+  }
+
+  process.stderr.write(`▸ ${frames.length} frames from "${templateId}"...\n`);
+
+  const { project } = await ctx.orchestrator.generateFramesFromTemplate(
+    projectId, templateId, frames, { perFrameDuration: opts.perFrame },
+  );
+
+  process.stderr.write(`▸ Exporting MP4 (${project.frames?.length ?? '?'} frames)...\n`);
+  const result = await ctx.orchestrator.exportMp4({
+    projectId,
+    ...(opts.output !== undefined && { outputPath: resolve(opts.output) }),
+    onProgress: (pct, stage) => {
+      if (pct % 20 === 0 || pct === 100) progress(stage, pct);
+    },
+  });
+
+  ok({
+    project_id: projectId,
+    output_path: result.outputPath,
+    frames: project.frames?.length,
+    duration_sec: result.project.frames?.reduce((s, f) => s + (f.durationSec || 0), 0) ?? 0,
+    status: result.project.status,
+  });
 }
