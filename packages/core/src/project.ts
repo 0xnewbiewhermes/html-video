@@ -962,6 +962,11 @@ function getDefaultOverlayMap(templateId: string): import('./types/index.js').Pr
       { variable: 'chip_left', x: 0.06, y: 0.07, fontSize: 16, fontColor: '#a0aec0', fontFile: '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', align: 'left' },
       { variable: 'chip_mid', x: 0.5, y: 0.07, fontSize: 16, fontColor: '#a0aec0', fontFile: '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', align: 'center' },
     ],
+    'frame-promo-gsap-var': [
+      { variable: 'headline', x: 0.5, y: 0.40, fontSize: 80, fontColor: '#f5f5f7', fontFile: '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', align: 'center' },
+      { variable: 'subheadline', x: 0.5, y: 0.55, fontSize: 28, fontColor: '#a0aec0', fontFile: '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', align: 'center' },
+      { variable: 'cta', x: 0.5, y: 0.65, fontSize: 20, fontColor: '#ffffff', fontFile: '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', align: 'center' },
+    ],
     'frame-liquid-bg-hero-var': [
       { variable: 'headline', x: 0.5, y: 0.45, fontSize: 96, fontColor: '#fafaf8', fontFile: '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', align: 'center' },
       { variable: 'subheadline', x: 0.5, y: 0.55, fontSize: 28, fontColor: '#c9d1d9', fontFile: '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', align: 'center' },

@@ -1,0 +1,82 @@
+spec_version: 1
+id: frame-promo-gsap-var
+name: GSAP Promo (Variable-Aware)
+description: >
+  Animated promo card with GSAP staggered entrance — headline slides up,
+  subheadline fades in, CTA bounces in. Gradient orbs + grid background.
+  Fully variable-aware: set headline/subheadline/cta via __HV_VARS__.
+
+engine: hyperframes
+engine_version: ^0.4.0
+source_entry: source/index.html
+
+category: marketing
+subcategory: promo-card
+tags: [promo, gsap, animated, gradient, variable-aware, headline]
+
+best_for:
+  - "Product announcement"
+  - "Feature highlight"
+  - "Social media promo"
+  - "App teaser"
+
+output:
+  formats: [mp4, webm]
+  default_format: mp4
+  resolution:
+    default: { width: 1920, height: 1080 }
+    supported_aspects: ["16:9", "9:16", "1:1"]
+  fps:
+    default: 60
+    supported: [30, 60]
+  duration:
+    type: variable
+    min_sec: 4
+    max_sec: 12
+  alpha: false
+  audio:
+    supported: true
+    expected_inputs: [bgm]
+
+inputs:
+  schema:
+    type: object
+    required: [headline]
+    properties:
+      headline:
+        type: "string"
+        maxLength: 80
+        description: "Main headline (use \\n for line break)"
+      subheadline:
+        type: "string"
+        maxLength: 160
+        description: "Supporting subheadline"
+      cta:
+        type: "string"
+        maxLength: 40
+        description: "Call to action button text"
+      chip:
+        type: "string"
+        maxLength: 40
+        description: "Top-left corner label"
+      duration_sec:
+        type: "number"
+        minimum: 4
+        maximum: 12
+        default: 6
+  examples:
+    - {"headline": "GSAP\\nPromo", "subheadline": "Staggered animation with GSAP", "cta": "↳ Try it", "duration_sec": 6}
+
+license:
+  spdx: Apache-2.0
+  attribution_required: false
+  redistribution_allowed: true
+  commercial_use: true
+
+author:
+  name: "0xnewbiewhermes (fork)"
+  url: "https://github.com/0xnewbiewhermes/html-video"
+
+version: 0.1.0
+preview:
+  poster: ""
