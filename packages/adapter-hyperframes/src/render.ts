@@ -17,7 +17,7 @@ import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs
 import { existsSync, readdirSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type {
   HtmlSceneOutput,
@@ -28,6 +28,34 @@ import type {
 import { HtmlVideoError } from '@html-video/core';
 
 const ADAPTER_VERSION = '0.2.0-playwright';
+
+// ── Shared variable renderer ──────────────────────────────────────────
+// Templates with [data-var] attributes get hv-renderer.js auto-inlined
+// so user-set __HV_VARS__ are applied to DOM elements at runtime.
+
+const SHARED_RENDERER_REL = '../_shared/hv-renderer.js';
+let rendererCache: string | null = null;
+
+/** Read hv-renderer.js relative to a template directory, cached. */
+async function loadSharedRenderer(fromDir: string): Promise<string> {
+  if (rendererCache !== null) return rendererCache as string;
+  try {
+    rendererCache = await readFile(resolve(fromDir, SHARED_RENDERER_REL), 'utf8');
+  } catch {
+    rendererCache = '';
+  }
+  return rendererCache;
+}
+
+// ── Render helpers ────────────────────────────────────────────────────
+
+function injectVarsHtml(rawHtml: string, varsJson: string, duration: number): string {
+  const safeJson = varsJson.replace(/<\/(script)/gi, '<\\/$1');
+  const head = `<script>\nwindow.__HV_VARS__ = ${safeJson};\nwindow.__HV_DURATION__ = ${duration};\n</script>`;
+  return rawHtml.includes('</head>')
+    ? rawHtml.replace('</head>', `${head}\n</head>`)
+    : rawHtml.replace('</body>', `${head}\n</body>`);
+}
 
 /** Real render: chromium records the page, ffmpeg transcodes to MP4. */
 export async function render(input: RenderInput, ctx: RenderContext): Promise<RenderOutput> {
@@ -119,18 +147,18 @@ export async function render(input: RenderInput, ctx: RenderContext): Promise<Re
     cleanupSrc = prepared.cleanup;
     // Resolve the URL chromium will navigate to.
     let loadHref = pathToFileURL(prepared.loadPath).href;
-    // Inject __HV_VARS__ when the template has variable markers.
+    // Auto-inject __HV_VARS__ + shared renderer for variable-aware templates.
     const rawHtml = await readFile(prepared.loadPath, 'utf8');
     if (rawHtml.includes('data-var') || rawHtml.includes('__HV_VARS__')) {
-      // Escape </script> to prevent XSS via user-supplied variable values
-      const safeJson = JSON.stringify(input.variables).replace(/<\/(script)/gi, '<\\/$1');
-      const varsScript = `<script>
-window.__HV_VARS__ = ${safeJson};
-window.__HV_DURATION__ = ${typeof input.config.duration === 'number' ? input.config.duration : 5};
-</script>`;
-      const injected = rawHtml.includes('</head>')
-        ? rawHtml.replace('</head>', `${varsScript}\n</head>`)
-        : rawHtml.replace('</body>', `${varsScript}\n</body>`);
+      const varsJson = JSON.stringify(input.variables);
+      const dur = typeof input.config.duration === 'number' ? input.config.duration : 5;
+      let injected = injectVarsHtml(rawHtml, varsJson, dur);
+      // Also inline the shared hv-renderer.js so data-var elements update.
+      const renderer = await loadSharedRenderer(input.template.sourcePath);
+      if (renderer) {
+        const tag = `<script>\n${renderer}\n</script>`;
+        injected = injected.replace('</body>', `${tag}\n</body>`);
+      }
       const injectedPath = prepared.loadPath.replace('.html', `.hv-${Date.now()}.html`);
       await writeFile(injectedPath, injected, 'utf8');
       if (cleanupSrc) { const c = cleanupSrc; await c().catch(() => {}); }
@@ -572,18 +600,18 @@ export async function renderToHtml(
   const posterPath = join(ctx.workDir, 'poster.svg');
 
   const sourceHtml = await readFile(input.template.sourcePath, 'utf8');
-  // Inject variables into <head> so template scripts can read __HV_VARS__
-  // before the DOM finishes loading. Previously injected at </body> which
-  // ran AFTER template scripts — those scripts saw undefined.
-  // Escape </script> to prevent XSS via user-supplied variable values
-  const safeJson = JSON.stringify(input.variables).replace(/<\/(script)/gi, '<\\/$1');
-  const varsScript = `<script>
-window.__HV_VARS__ = ${safeJson};
-window.__HV_DURATION__ = ${typeof input.config.duration === 'number' ? input.config.duration : 5};
-</script>`;
-  const augmented = sourceHtml.includes('</head>')
-    ? sourceHtml.replace('</head>', `${varsScript}\n</head>`)
-    : sourceHtml.replace('</body>', `${varsScript}\n</body>`);
+  let augmented = injectVarsHtml(
+    sourceHtml,
+    JSON.stringify(input.variables),
+    typeof input.config.duration === 'number' ? input.config.duration : 5,
+  );
+  // Inline shared renderer for variable-aware templates.
+  if (sourceHtml.includes('data-var') || sourceHtml.includes('__HV_VARS__')) {
+    const renderer = await loadSharedRenderer(input.template.sourcePath);
+    if (renderer) {
+      augmented = augmented.replace('</body>', `<script>\n${renderer}\n</script>\n</body>`);
+    }
+  }
   await writeFile(htmlPath, augmented, 'utf8');
 
   // Cheap poster: an SVG placeholder we draw ourselves (no headless chromium yet).

@@ -57,22 +57,5 @@
     <span class="text-diff" data-var="footer_right">html-video</span>
   </footer>
 
-<script>
-/* Variable renderer — delayed to let HV_VARS injection run first */
-setTimeout(function() {
-  var vars = {};
-  try { vars = window.__HV_VARS__ || {}; } catch(e) {}
-  var els = document.querySelectorAll('[data-var]');
-  for (var i = 0; i < els.length; i++) {
-    var el = els[i];
-    var key = el.getAttribute('data-var');
-    var val = vars[key];
-    if (val && typeof val === 'string') el.textContent = val;
-  }
-  var dur = vars.duration_sec || 6;
-  document.documentElement.style.setProperty('--hv-duration', dur + 's');
-  console.log('[HV] Applied', Object.keys(vars).length, 'variables:', JSON.stringify(vars));
-}, 50);
-</script>
 </body>
 </html>
