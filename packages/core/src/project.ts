@@ -453,12 +453,15 @@ export class ProjectOrchestrator {
     } catch { /* no shared renderer — templates with own inline script still work */ }
 
     const defaultDuration = defaults?.perFrameDuration ?? 5;
-    const graphNodes = frameDefs.map((def, i) => ({
-      id: `frame-${String(i + 1).padStart(2, '0')}`,
-      kind: 'text' as const,
-      text: typeof def.headline === 'string' ? def.headline : `Frame ${i + 1}`,
-      durationSec: (def.durationSec ?? defaultDuration) as number,
-    }));
+    const graphNodes = frameDefs.map((def, i) => {
+      const dur = typeof def.durationSec === 'number' ? def.durationSec : defaultDuration;
+      return {
+        id: `frame-${String(i + 1).padStart(2, '0')}`,
+        kind: 'text' as const,
+        text: typeof def.headline === 'string' ? def.headline : `Frame ${i + 1}`,
+        durationSec: dur,
+      };
+    });
     const graphEdges = graphNodes.slice(0, -1).map((n, i) => ({
       from: n.id,
       to: graphNodes[i + 1]!.id,
@@ -480,7 +483,8 @@ export class ProjectOrchestrator {
 
       // Inject variables into template HTML (same pattern as injectVarsHtml in adapter)
       const varsJson = JSON.stringify(vars).replace(/<\/(script)/gi, '<\\/$1');
-      const headBlock = `<script>\nwindow.__HV_VARS__ = ${varsJson};\nwindow.__HV_DURATION__ = ${(def.durationSec ?? defaultDuration)};\n</script>`;
+      const safeDuration = typeof def.durationSec === 'number' ? def.durationSec : defaultDuration;
+      const headBlock = `<script>\nwindow.__HV_VARS__ = ${varsJson};\nwindow.__HV_DURATION__ = ${safeDuration};\n</script>`;
       let frameHtml = templateHtml.includes('</head>')
         ? templateHtml.replace('</head>', `${headBlock}\n</head>`)
         : templateHtml.replace('</body>', `${headBlock}\n</body>`);
