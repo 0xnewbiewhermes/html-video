@@ -116,7 +116,26 @@ export async function render(input: RenderInput, ctx: RenderContext): Promise<Re
     // instead of an empty shell. Single-file templates pass through untouched.
     const prepared = await prepareSourceHtml(input.template.sourcePath);
     cleanupSrc = prepared.cleanup;
-    const fileUrl = pathToFileURL(prepared.loadPath).href;
+    // Resolve the URL chromium will navigate to.
+    let loadHref = pathToFileURL(prepared.loadPath).href;
+    // Inject __HV_VARS__ when the template has variable markers.
+    const rawHtml = await readFile(prepared.loadPath, 'utf8');
+    if (rawHtml.includes('data-var') || rawHtml.includes('__HV_VARS__')) {
+      // Escape </script> to prevent XSS via user-supplied variable values
+      const safeJson = JSON.stringify(input.variables).replace(/<\/(script)/gi, '<\\/$1');
+      const varsScript = `<script>
+window.__HV_VARS__ = ${safeJson};
+window.__HV_DURATION__ = ${typeof input.config.duration === 'number' ? input.config.duration : 5};
+</script>`;
+      const injected = rawHtml.includes('</head>')
+        ? rawHtml.replace('</head>', `${varsScript}\n</head>`)
+        : rawHtml.replace('</body>', `${varsScript}\n</body>`);
+      const injectedPath = prepared.loadPath.replace('.html', `.hv-${Date.now()}.html`);
+      await writeFile(injectedPath, injected, 'utf8');
+      if (cleanupSrc) { const c = cleanupSrc; await c().catch(() => {}); }
+      cleanupSrc = async () => { await rm(injectedPath, { force: true }).catch(() => {}); };
+      loadHref = pathToFileURL(injectedPath).href;
+    }
     // Wait only for the DOM + same-document scripts (GSAP, the inline player),
     // NOT `load` — `load` blocks on every external asset, and some templates
     // reference a cross-origin A-Roll video (e.g. an S3 mp4 with no CORS
@@ -125,7 +144,7 @@ export async function render(input: RenderInput, ctx: RenderContext): Promise<Re
     // timeline ever plays, so the clip opens on several dead seconds. Fonts are
     // awaited separately below (document.fonts.ready); GSAP is a synchronous
     // <head> script so it's ready at DOMContentLoaded.
-    await page.goto(fileUrl, { waitUntil: 'domcontentloaded' });
+    await page.goto(loadHref, { waitUntil: 'domcontentloaded' });
 
     // Wait for all web fonts to finish loading BEFORE recording. Templates
     // pull display faces (Shrikhand, Libre Baskerville, Archivo Black, …) from
@@ -552,14 +571,18 @@ export async function renderToHtml(
   const posterPath = join(ctx.workDir, 'poster.svg');
 
   const sourceHtml = await readFile(input.template.sourcePath, 'utf8');
-  const augmented = sourceHtml.replace(
-    '</body>',
-    `<script>
-window.__HV_VARS__ = ${JSON.stringify(input.variables)};
+  // Inject variables into <head> so template scripts can read __HV_VARS__
+  // before the DOM finishes loading. Previously injected at </body> which
+  // ran AFTER template scripts — those scripts saw undefined.
+  // Escape </script> to prevent XSS via user-supplied variable values
+  const safeJson = JSON.stringify(input.variables).replace(/<\/(script)/gi, '<\\/$1');
+  const varsScript = `<script>
+window.__HV_VARS__ = ${safeJson};
 window.__HV_DURATION__ = ${typeof input.config.duration === 'number' ? input.config.duration : 5};
-console.log('html-video preview vars', window.__HV_VARS__);
-</script></body>`,
-  );
+</script>`;
+  const augmented = sourceHtml.includes('</head>')
+    ? sourceHtml.replace('</head>', `${varsScript}\n</head>`)
+    : sourceHtml.replace('</body>', `${varsScript}\n</body>`);
   await writeFile(htmlPath, augmented, 'utf8');
 
   // Cheap poster: an SVG placeholder we draw ourselves (no headless chromium yet).
