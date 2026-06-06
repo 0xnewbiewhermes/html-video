@@ -19,3 +19,5 @@ export {
   generateMusic,
 } from './minimax.js';
 export type { MinimaxCredentials, MinimaxAudioResult } from './minimax.js';
+export { applyTextOverlay, stripTextMarkers } from './compositor.js';
+export type { TextOverlayDef } from './compositor.js';

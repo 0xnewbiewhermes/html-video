@@ -391,6 +391,26 @@ export interface Project {
   frames?: FrameRecord[];
   /** v0.9: optional background music + narration mixed into the export. */
   soundtrack?: ProjectSoundtrack;
+  /**
+   * v0.10: cached background video (no text) for overlay text system.
+   * Set once by renderBackground(), then reused for instant overlay renders.
+   * When present, renderWithOverlay() skips Chromium and uses ffmpeg drawtext.
+   */
+  backgroundVideoPath?: string;
+  /**
+   * v0.10: text overlay positions extracted from the rendered template.
+   * Each entry maps a variable name to its on-screen position + style,
+   * so the compositor knows where to draw text without running Chromium.
+   */
+  textOverlayMap?: Array<{
+    variable: string;
+    x: number;
+    y: number;
+    fontSize: number;
+    fontColor: string;
+    fontFile: string;
+    align: 'left' | 'center' | 'right';
+  }>;
   createdAt: string;
   updatedAt: string;
 }

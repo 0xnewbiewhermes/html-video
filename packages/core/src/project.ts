@@ -416,6 +416,95 @@ export class ProjectOrchestrator {
   }
 
   /**
+   * Render background layer (no text) and cache it for overlay text system.
+   * Chromium renders once; subsequent text-only changes use ffmpeg drawtext.
+   *
+   * After this, call renderWithOverlay() for instant text-only re-renders.
+   */
+  async renderBackground(projectId: string): Promise<{ project: Project; bgPath: string }> {
+    const project = await this.deps.projects.load(projectId);
+    const projectDir = await this.deps.projects.ensureDir(projectId);
+    const bgPath = join(projectDir, 'background.mp4');
+    const tmpl = project.templateId ? this.deps.templates.get(project.templateId) : null;
+    const engineId = tmpl?.engine ?? 'hyperframes';
+    const adapter = this.deps.engines.get(engineId);
+
+    if (project.frames && project.frames.length > 0) {
+      // Multi-frame: render each frame's background, concat later.
+      // For now, render first frame's background.
+      const first = project.frames.sort((a, b) => a.order - b.order)[0]!;
+      const { stripTextMarkers } = await import('./compositor.js');
+      const { readFile: rf, writeFile: wf } = await import('node:fs/promises');
+      const rawHtml = await rf(first.htmlPath, 'utf8');
+      const bgHtml = stripTextMarkers(rawHtml);
+      const bgHtmlPath = join(projectDir, 'frames', 'background.html');
+      await wf(bgHtmlPath, bgHtml, 'utf8');
+      await adapter.render({
+        template: { id: 'bg-render', engine: engineId, sourcePath: bgHtmlPath },
+        variables: project.variables,
+        config: { format: 'mp4', resolution: { width: 1920, height: 1080 }, fps: 60, duration: first.durationSec, outputPath: bgPath },
+      }, { workDir: projectDir });
+    } else if (project.templateId && tmpl) {
+      // Single-frame: render template with [data-var] hidden.
+      const { readFile, writeFile } = await import('node:fs/promises');
+      const { stripTextMarkers } = await import('./compositor.js');
+      const sourcePath = join(tmpl.__dir!, tmpl.source_entry);
+      const sourceHtml = await readFile(sourcePath, 'utf8');
+      const bgHtml = sourceHtml.includes('data-var') ? stripTextMarkers(sourceHtml) : sourceHtml;
+      const bgHtmlPath = join(projectDir, 'background.html');
+      await writeFile(bgHtmlPath, bgHtml, 'utf8');
+      const dur = typeof project.variables.duration_sec === 'number' ? project.variables.duration_sec : 5;
+      await adapter.render({
+        template: { id: 'bg-render', engine: engineId, sourcePath: bgHtmlPath },
+        variables: project.variables,
+        config: { format: 'mp4', resolution: { width: 1920, height: 1080 }, fps: 60, duration: dur, outputPath: bgPath },
+      }, { workDir: projectDir });
+    } else {
+      throw new HtmlVideoError('invalid-input', 'Project has no template or frames for background render');
+    }
+
+    project.backgroundVideoPath = bgPath;
+    // Store default overlay positions for the template
+    project.textOverlayMap = getDefaultOverlayMap(tmpl?.id ?? '');
+    await this.deps.projects.save(project);
+    return { project, bgPath };
+  }
+
+  /**
+   * Render video using overlay text system — skips Chromium entirely,
+   * uses ffmpeg drawtext on the cached background video.
+   *
+   * Requires renderBackground() to have been called first.
+   * ~0.1-0.5s per render vs 5-15s for full Chromium record.
+   */
+  async renderWithOverlay(projectId: string, outputPath?: string): Promise<{ project: Project; outPath: string }> {
+    const project = await this.deps.projects.load(projectId);
+    if (!project.backgroundVideoPath) {
+      throw new HtmlVideoError('invalid-input', 'No background video cached. Call renderBackground() first.');
+    }
+    if (!project.textOverlayMap || project.textOverlayMap.length === 0) {
+      // No overlay config — just copy the background as the output
+      const outPath = outputPath ?? join(await this.deps.projects.ensureDir(projectId), 'overlay-output.mp4');
+      await import('node:fs/promises').then(m => m.copyFile(project.backgroundVideoPath!, outPath));
+      return { project, outPath };
+    }
+    const { applyTextOverlay } = await import('./compositor.js');
+    const outPath = outputPath ?? join(await this.deps.projects.ensureDir(projectId), 'overlay-output.mp4');
+    await applyTextOverlay({
+      backgroundPath: project.backgroundVideoPath,
+      outputPath: outPath,
+      variables: project.variables,
+      overlays: project.textOverlayMap,
+      durationSec: undefined,
+      fps: 60,
+    });
+    project.lastOutputMp4Path = outPath;
+    project.status = 'rendered';
+    await this.deps.projects.save(project);
+    return { project, outPath };
+  }
+
+  /**
    * Generate multi-frame video from a single template with per-frame variables.
    *
    * Uses the template's HTML as the visual base for every frame, injecting
@@ -852,5 +941,28 @@ function downgradeStatus(current: ProjectStatus, target: ProjectStatus): Project
   // 'rendered' / 'previewed' get demoted back to 'draft' on any meaningful change.
   if (target === 'draft') return 'draft';
   return current;
+}
+
+/**
+ * Default text overlay positions for variable-aware templates.
+ * Maps template ID → array of TextOverlayDef for ffmpeg drawtext.
+ * Font paths assume a Linux system with these fonts installed.
+ */
+function getDefaultOverlayMap(templateId: string): import('./types/index.js').Project['textOverlayMap'] {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const maps: Record<string, import('./compositor.js').TextOverlayDef[]> = {
+    'frame-glitch-title-var': [
+      { variable: 'title', x: 0.5, y: 0.45, fontSize: 96, fontColor: '#f5f5f7', fontFile: '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', align: 'center' },
+      { variable: 'subtitle', x: 0.5, y: 0.58, fontSize: 24, fontColor: '#a0aec0', fontFile: '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', align: 'center' },
+      { variable: 'chip_left', x: 0.06, y: 0.07, fontSize: 16, fontColor: '#a0aec0', fontFile: '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', align: 'left' },
+      { variable: 'chip_mid', x: 0.5, y: 0.07, fontSize: 16, fontColor: '#a0aec0', fontFile: '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', align: 'center' },
+    ],
+    'frame-liquid-bg-hero-var': [
+      { variable: 'headline', x: 0.5, y: 0.45, fontSize: 96, fontColor: '#fafaf8', fontFile: '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', align: 'center' },
+      { variable: 'subheadline', x: 0.5, y: 0.55, fontSize: 28, fontColor: '#c9d1d9', fontFile: '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', align: 'center' },
+      { variable: 'cta', x: 0.5, y: 0.63, fontSize: 18, fontColor: '#fafaf8', fontFile: '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', align: 'center' },
+    ],
+  };
+  return (maps[templateId] ?? undefined) as any;
 }
 
