@@ -71,6 +71,7 @@ export async function render(input: RenderInput, ctx: RenderContext): Promise<Re
     browser = await playwright.chromium.launch({
       headless: true,
       args: ['--no-sandbox', '--disable-blink-features=AutomationControlled'],
+      ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH } : {}),
     });
     // recordVideo starts capturing the moment the context exists, so this is
     // the webm's t=0 reference.
